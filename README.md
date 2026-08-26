@@ -57,3 +57,35 @@ runs-on: [self-hosted, linux, ARM64]
 ```yaml
 runs-on: [self-hosted, linux, ARM64, rk3588]
 ```
+
+## Runner 在线但 checkout 卡住
+
+Self-hosted Runner 显示在线、能领取 Job，并不代表大体积 Git fetch 一定稳定。网络抖动时常见现象是：
+
+```text
+Set up job                  success
+Runner identity             success
+git ls-remote               偶尔成功
+checkout / git fetch        长时间无输出，最终被 Job timeout 取消
+```
+
+这种情况下不要只把 `timeout-minutes` 调大。大仓库的一次 Git fetch 如果恰好进入坏连接，会把整个 Job 一直占住。
+
+仓库已提供经过 RK3588 真机验证的模板：
+
+```text
+examples/resilient-self-hosted-checkout.yml
+```
+
+核心处理方式：
+
+1. 每次 `git fetch` 都设置硬超时，不允许单次连接无限卡住。
+2. 失败后自动重试，多次短尝试代替一次超长尝试。
+3. 使用 `--filter=blob:none` 做 partial clone，减少首次传输量。
+4. 使用 sparse checkout，只展开当前 Job 真正需要的目录。
+5. 将 Git HTTP 设置为 HTTP/1.1，并配置 `http.lowSpeedLimit` / `http.lowSpeedTime`，让停滞传输尽快失败后进入下一次重试。
+6. Self-hosted workspace 每次显式初始化，避免上一次失败留下的半成品仓库干扰下一次任务。
+
+对于普通、网络稳定且仓库较小的环境，仍可直接使用当前版本的 `actions/checkout`。对于国内服务器、边缘开发板、GitHub 链路有间歇性超时，或仓库体积较大的情况，优先使用上述 resilient checkout 模板。
+
+如果连多次 `git ls-remote https://github.com/OWNER/REPO.git HEAD` 都无法成功，则问题已经不是 checkout 策略，而是服务器到 GitHub 的出口链路本身；此时应先为 Runner 服务配置可用代理或修复服务器网络。
