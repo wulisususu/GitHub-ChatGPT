@@ -1,0 +1,100 @@
+# Resilient checkout for self-hosted Linux runners on unstable GitHub links.
+#
+# Why not only use actions/checkout?
+# A self-hosted runner can stay online and accept jobs while a larger Git fetch
+# stalls on an intermittent route. This pattern bounds every fetch attempt,
+# retries failed transfers, and combines partial clone with sparse checkout.
+#
+# Copy the checkout step into the target repository and edit SPARSE_PATHS to
+# contain only the directories required by that job.
+
+name: Self-hosted Runner Resilient Checkout
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    # Add a device label such as rk3588 when needed.
+    runs-on: [self-hosted, linux, ARM64]
+    timeout-minutes: 10
+
+    env:
+      # Space-separated cone-mode directories required by this job.
+      # Replace these examples with paths from the target repository.
+      SPARSE_PATHS: ".github docs"
+      FETCH_ATTEMPTS: "5"
+      FETCH_TIMEOUT_SECONDS: "120"
+
+    steps:
+      - name: Runner identity
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "runner_name=${RUNNER_NAME:-unknown}"
+          echo "runner_os=${RUNNER_OS:-unknown}"
+          echo "runner_arch=${RUNNER_ARCH:-unknown}"
+          echo "hostname=$(hostname)"
+          uname -a
+          git --version
+
+      - name: Robust partial checkout
+        shell: bash
+        env:
+          GIT_TERMINAL_PROMPT: "0"
+        run: |
+          set -euo pipefail
+          cd "$GITHUB_WORKSPACE"
+
+          # Self-hosted workspaces persist between jobs. Start from a known state.
+          find . -mindepth 1 -maxdepth 1 -exec rm -rf -- {} +
+
+          git init .
+          git remote add origin "https://github.com/${GITHUB_REPOSITORY}.git"
+          git config --local gc.auto 0
+
+          # Fail stalled HTTP transfers instead of letting one fetch consume the job.
+          git config --local http.version HTTP/1.1
+          git config --local http.lowSpeedLimit 1024
+          git config --local http.lowSpeedTime 15
+
+          git sparse-checkout init --cone
+          # shellcheck disable=SC2086
+          git sparse-checkout set ${SPARSE_PATHS}
+
+          fetched=0
+          attempt=1
+          while [ "$attempt" -le "$FETCH_ATTEMPTS" ]; do
+            echo "fetch attempt ${attempt}/${FETCH_ATTEMPTS}"
+            if timeout "${FETCH_TIMEOUT_SECONDS}s" git -c protocol.version=2 fetch \
+              --filter=blob:none \
+              --no-tags \
+              --prune \
+              --no-recurse-submodules \
+              --depth=1 \
+              origin "+${GITHUB_SHA}:refs/remotes/origin/__runner_target"; then
+              fetched=1
+              break
+            fi
+
+            sleep $((attempt * 3))
+            attempt=$((attempt + 1))
+          done
+
+          if [ "$fetched" -ne 1 ]; then
+            echo "Git fetch failed after ${FETCH_ATTEMPTS} bounded attempts." >&2
+            exit 1
+          fi
+
+          git checkout --force --detach "$GITHUB_SHA"
+
+      - name: Verify checkout
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          git status --short
+          echo "Checkout verified: $GITHUB_SHA"
