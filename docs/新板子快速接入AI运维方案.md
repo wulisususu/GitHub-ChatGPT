@@ -1,5 +1,7 @@
 # 新板子快速接入 AI 运维方案
 
+> 已落地的首次 Runner 接入工具是仓库根目录的 `deploy_runner.py`。它在本机经 `127.0.0.1:7897` 下载并校验 Runner，再通过 SSH/SFTP 上传到服务器；使用方式见 [README](../README.md)。本文件保留为后续 edge-agent 与业务运维能力的架构规划。
+
 ## 目标
 
 将新开发板快速接入 GitHub Actions + Self-hosted Runner + AI 自动部署体系。
@@ -74,32 +76,15 @@ Runner 不负责业务逻辑。
 
 # 三、公共设备管理仓库
 
-建议建立：
+当前仓库已包含最小可执行接入工具：
 
 ```
-wulisususu/edge-agent
+GitHub-ChatGPT
+├── deploy_runner.py
+└── tests/test_deploy_runner.py
 ```
 
-结构：
-
-```
-edge-agent
-|
-├── bootstrap.sh
-├── install-runner.sh
-├── collect-info.sh
-|
-├── control/
-│   ├── deploy.sh
-│   ├── backup.sh
-│   ├── rollback.sh
-│   └── healthcheck.sh
-|
-└── templates/
-    ├── fastapi.service
-    ├── golang.service
-    └── docker-compose.yml
-```
+未来如需设备状态采集、备份、回滚和多项目编排，再拆分为独立 `edge-agent` 仓库。
 
 ---
 
